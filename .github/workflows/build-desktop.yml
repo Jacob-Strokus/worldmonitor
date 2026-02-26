@@ -50,7 +50,7 @@ jobs:
             node_target: 'x86_64-pc-windows-msvc'
             label: 'Windows-x64'
             timeout: 120
-          - platform: 'ubuntu-22.04'
+          - platform: 'ubuntu-24.04'
             args: ''
             node_target: 'x86_64-unknown-linux-gnu'
             label: 'Linux-x64'
@@ -89,7 +89,13 @@ jobs:
         if: contains(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good
 
       - name: Install frontend dependencies
         run: npm ci
@@ -286,6 +292,45 @@ jobs:
             exit 1
           fi
           echo "Verified signed app bundle and embedded Node runtime: $NODE_PATH"
+
+      - name: Smoke-test AppImage (Linux)
+        if: contains(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          sudo apt-get install -y xvfb imagemagick
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name '*.AppImage' | head -1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "::error::No AppImage found after build"
+            exit 1
+          fi
+          chmod +x "$APPIMAGE"
+          # Start Xvfb with known display number
+          Xvfb :99 -screen 0 1440x900x24 &
+          export DISPLAY=:99
+          sleep 2
+          # Launch AppImage under virtual framebuffer
+          "$APPIMAGE" --no-sandbox &
+          APP_PID=$!
+          # Wait for app to render
+          sleep 15
+          # Screenshot the virtual display
+          import -window root screenshot.png || true
+          # Verify app is still running (didn't crash)
+          if kill -0 $APP_PID 2>/dev/null; then
+            echo "✅ AppImage launched successfully"
+            kill $APP_PID || true
+          else
+            echo "❌ AppImage crashed during startup"
+            exit 1
+          fi
+
+      - name: Upload smoke test screenshot
+        if: contains(matrix.platform, 'ubuntu')
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-smoke-test-screenshot
+          path: screenshot.png
+          if-no-files-found: warn
 
       - name: Cleanup Apple signing materials
         if: always() && contains(matrix.platform, 'macos')
